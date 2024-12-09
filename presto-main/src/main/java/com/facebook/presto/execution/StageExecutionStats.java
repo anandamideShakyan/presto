@@ -302,16 +302,20 @@ public class StageExecutionStats
     }
 
     @JsonProperty
-    public int getTotalSplits() { return totalSplits; }
+    public int getTotalSplits()
+    { return totalSplits; }
 
     @JsonProperty
-    public int getQueuedSplits() { return queuedSplits; }
+    public int getQueuedSplits()
+    { return queuedSplits; }
 
     @JsonProperty
-    public int getRunningSplits() { return runningSplits; }
+    public int getRunningSplits()
+    { return runningSplits; }
 
     @JsonProperty
-    public int getCompletedSplits() { return completedSplits; }
+    public int getCompletedSplits()
+    { return completedSplits; }
 
     @JsonProperty
     public double getCumulativeUserMemory()

@@ -466,6 +466,11 @@ public class TaskContext
         int blockedDrivers = 0;
         int completedDrivers = 0;
 
+        int totalSplits = 0;
+        int queuedSplits = 0;
+        int runningSplits = 0;
+        int completedSplits = 0;
+
         long totalScheduledTime = 0;
         long totalCpuTime = 0;
         long totalBlockedTime = 0;
@@ -508,6 +513,10 @@ public class TaskContext
             runningPartitionedSplitsWeight += pipeline.getRunningPartitionedSplitsWeight();
             blockedDrivers += pipeline.getBlockedDrivers();
             completedDrivers += pipeline.getCompletedDrivers();
+            totalSplits += pipeline.getTotalDrivers();
+            queuedSplits += pipeline.getQueuedDrivers();
+            runningSplits += pipeline.getRunningDrivers();
+            completedSplits += pipeline.getCompletedDrivers();
 
             totalScheduledTime += pipeline.getTotalScheduledTimeInNanos();
             totalCpuTime += pipeline.getTotalCpuTimeInNanos();
@@ -589,6 +598,12 @@ public class TaskContext
                 runningPartitionedSplitsWeight,
                 blockedDrivers,
                 completedDrivers,
+
+                totalSplits,
+                queuedSplits,
+                runningSplits,
+                completedSplits,
+
                 cumulativeUserMemory.get(),
                 cumulativeTotalMemory.get(),
                 userMemory,
