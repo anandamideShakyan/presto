@@ -53,6 +53,11 @@ public class TaskStats
     private final int blockedDrivers;
     private final int completedDrivers;
 
+    private final int totalSplits;
+    private final int queuedSplits;
+    private final int runningSplits;
+    private final int completedSplits;
+
     private final double cumulativeUserMemory;
     private final double cumulativeTotalMemory;
     private final long userMemoryReservationInBytes;
@@ -221,6 +226,18 @@ public class TaskStats
 
         checkArgument(completedDrivers >= 0, "completedDrivers is negative");
         this.completedDrivers = completedDrivers;
+
+        checkArgument(totalDrivers >= 0, "totalSplits is negative");
+        this.totalSplits = totalDrivers;
+
+        checkArgument(queuedDrivers >= 0, "queuedSplits is negative");
+        this.queuedSplits = queuedDrivers;
+
+        checkArgument(runningDrivers >= 0, "runningSplits is negative");
+        this.runningSplits = runningDrivers;
+
+        checkArgument(completedDrivers >= 0, "completedSplits is negative");
+        this.completedSplits = completedDrivers;
 
         this.cumulativeUserMemory = cumulativeUserMemory;
         this.cumulativeTotalMemory = cumulativeTotalMemory;
@@ -551,6 +568,34 @@ public class TaskStats
     public RuntimeStats getRuntimeStats()
     {
         return runtimeStats;
+    }
+
+    @JsonProperty
+    @ThriftField(42)
+    public  int getTotalSplits()
+    {
+        return totalSplits;
+    }
+
+    @JsonProperty
+    @ThriftField(43)
+    public int getQueuedSplits()
+    {
+        return queuedSplits;
+    }
+
+    @JsonProperty
+    @ThriftField(44)
+    public int getRunningSplits()
+    {
+        return runningSplits;
+    }
+
+    @JsonProperty
+    @ThriftField(45)
+    public int getCompletedSplits()
+    {
+        return completedSplits;
     }
 
     public TaskStats summarize()
