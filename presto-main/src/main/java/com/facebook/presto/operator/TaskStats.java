@@ -572,7 +572,7 @@ public class TaskStats
 
     @JsonProperty
     @ThriftField(42)
-    public  int getTotalSplits()
+    public int getTotalSplits()
     {
         return totalSplits;
     }
