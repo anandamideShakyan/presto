@@ -728,6 +728,13 @@ void to_json(json& j, const IcebergInsertTableHandle& p) {
       "IcebergInsertTableHandle",
       "Map<String, String>",
       "storageProperties");
+  to_json_key(
+      j,
+      "sortOrder",
+      p.sortOrder,
+      "IcebergInsertTableHandle",
+      "List<SortField>",
+      "sortOrder");
 }
 
 void from_json(const json& j, IcebergInsertTableHandle& p) {
@@ -795,6 +802,13 @@ void from_json(const json& j, IcebergInsertTableHandle& p) {
       "IcebergInsertTableHandle",
       "Map<String, String>",
       "storageProperties");
+  from_json_key(
+      j,
+      "sortOrder",
+      p.sortOrder,
+      "IcebergInsertTableHandle",
+      "List<SortField>",
+      "sortOrder");
 }
 } // namespace facebook::presto::protocol::iceberg
 namespace facebook::presto::protocol::iceberg {
@@ -868,6 +882,13 @@ void to_json(json& j, const IcebergOutputTableHandle& p) {
       "IcebergOutputTableHandle",
       "Map<String, String>",
       "storageProperties");
+  to_json_key(
+      j,
+      "sortOrder",
+      p.sortOrder,
+      "IcebergOutputTableHandle",
+      "List<SortField>",
+      "sortOrder");
 }
 
 void from_json(const json& j, IcebergOutputTableHandle& p) {
@@ -935,6 +956,13 @@ void from_json(const json& j, IcebergOutputTableHandle& p) {
       "IcebergOutputTableHandle",
       "Map<String, String>",
       "storageProperties");
+  from_json_key(
+      j,
+      "sortOrder",
+      p.sortOrder,
+      "IcebergOutputTableHandle",
+      "List<SortField>",
+      "sortOrder");
 }
 } // namespace facebook::presto::protocol::iceberg
 namespace facebook::presto::protocol::iceberg {
@@ -1013,6 +1041,13 @@ void to_json(json& j, const IcebergSplit& p) {
       "IcebergSplit",
       "int64_t",
       "dataSequenceNumber");
+  to_json_key(
+      j,
+      "affinitySchedulingSectionSize",
+      p.affinitySchedulingSectionSize,
+      "IcebergSplit",
+      "int64_t",
+      "affinitySchedulingSectionSize");
 }
 
 void from_json(const json& j, IcebergSplit& p) {
@@ -1085,6 +1120,13 @@ void from_json(const json& j, IcebergSplit& p) {
       "IcebergSplit",
       "int64_t",
       "dataSequenceNumber");
+  from_json_key(
+      j,
+      "affinitySchedulingSectionSize",
+      p.affinitySchedulingSectionSize,
+      "IcebergSplit",
+      "int64_t",
+      "affinitySchedulingSectionSize");
 }
 } // namespace facebook::presto::protocol::iceberg
 namespace facebook::presto::protocol::iceberg {
@@ -1151,6 +1193,20 @@ void to_json(json& j, const IcebergTableHandle& p) {
       "IcebergTableHandle",
       "List<Integer>",
       "equalityFieldIds");
+  to_json_key(
+      j,
+      "sortOrder",
+      p.sortOrder,
+      "IcebergTableHandle",
+      "List<SortField>",
+      "sortOrder");
+  to_json_key(
+      j,
+      "updatedColumns",
+      p.updatedColumns,
+      "IcebergTableHandle",
+      "List<IcebergColumnHandle>",
+      "updatedColumns");
 }
 
 void from_json(const json& j, IcebergTableHandle& p) {
@@ -1211,6 +1267,20 @@ void from_json(const json& j, IcebergTableHandle& p) {
       "IcebergTableHandle",
       "List<Integer>",
       "equalityFieldIds");
+  from_json_key(
+      j,
+      "sortOrder",
+      p.sortOrder,
+      "IcebergTableHandle",
+      "List<SortField>",
+      "sortOrder");
+  from_json_key(
+      j,
+      "updatedColumns",
+      p.updatedColumns,
+      "IcebergTableHandle",
+      "List<IcebergColumnHandle>",
+      "updatedColumns");
 }
 } // namespace facebook::presto::protocol::iceberg
 namespace facebook::presto::protocol::iceberg {
