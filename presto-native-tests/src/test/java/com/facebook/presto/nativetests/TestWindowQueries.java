@@ -20,6 +20,8 @@ import org.intellij.lang.annotations.Language;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.util.Optional;
+
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.common.type.VarcharType.createVarcharType;
@@ -48,7 +50,7 @@ public class TestWindowQueries
     @Override
     protected QueryRunner createQueryRunner() throws Exception
     {
-        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled);
+        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled, Optional.empty());
     }
 
     @Override

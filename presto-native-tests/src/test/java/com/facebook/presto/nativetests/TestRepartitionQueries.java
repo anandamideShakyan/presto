@@ -17,6 +17,8 @@ import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.AbstractTestRepartitionQueries;
 import org.testng.annotations.BeforeClass;
 
+import java.util.Optional;
+
 import static java.lang.Boolean.parseBoolean;
 
 public class TestRepartitionQueries
@@ -38,7 +40,7 @@ public class TestRepartitionQueries
     @Override
     protected QueryRunner createQueryRunner() throws Exception
     {
-        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled);
+        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled, Optional.empty());
     }
 
     @Override

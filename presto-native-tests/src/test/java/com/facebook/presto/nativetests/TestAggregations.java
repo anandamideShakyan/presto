@@ -16,6 +16,8 @@ package com.facebook.presto.nativetests;
 import com.facebook.presto.testing.QueryRunner;
 import org.testng.annotations.BeforeClass;
 
+import java.util.Optional;
+
 import static java.lang.Boolean.parseBoolean;
 
 public class TestAggregations
@@ -38,7 +40,7 @@ public class TestAggregations
     @Override
     protected QueryRunner createQueryRunner() throws Exception
     {
-        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled);
+        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled, Optional.empty());
     }
 
     @Override

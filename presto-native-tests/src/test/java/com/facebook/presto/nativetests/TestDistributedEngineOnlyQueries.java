@@ -24,6 +24,7 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Boolean.parseBoolean;
@@ -31,7 +32,10 @@ import static java.lang.Boolean.parseBoolean;
 public class TestDistributedEngineOnlyQueries
         extends AbstractTestEngineOnlyQueries
 {
-    private String timeTypeUnsupportedError;
+    private static final String timeTypeUnsupportedErrorWithoutSidecar = ".*Failed to parse type \\[time.*";
+    private static final String timeTypeUnsupportedErrorWithSidecar = "^Unknown type time.*";
+    private String timeTypeUnsupportedError = timeTypeUnsupportedErrorWithoutSidecar;
+
     private String storageFormat;
     private boolean sidecarEnabled;
 
@@ -42,12 +46,6 @@ public class TestDistributedEngineOnlyQueries
     {
         storageFormat = System.getProperty("storageFormat", "PARQUET");
         sidecarEnabled = parseBoolean(System.getProperty("sidecarEnabled", "true"));
-        if (sidecarEnabled) {
-            timeTypeUnsupportedError = "^Unknown type time.*";
-        }
-        else {
-            timeTypeUnsupportedError = ".*Failed to parse type \\[time.*";
-        }
         super.init();
     }
 
@@ -55,7 +53,10 @@ public class TestDistributedEngineOnlyQueries
     protected QueryRunner createQueryRunner()
             throws Exception
     {
-        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled);
+        if (sidecarEnabled) {
+            timeTypeUnsupportedError = timeTypeUnsupportedErrorWithSidecar;
+        }
+        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled, Optional.empty());
     }
 
     @Override

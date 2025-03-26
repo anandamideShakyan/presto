@@ -16,6 +16,9 @@ package com.facebook.presto.nativetests;
 import com.facebook.presto.nativeworker.NativeQueryRunnerUtils;
 import com.facebook.presto.testing.QueryRunner;
 
+import java.util.Optional;
+
+import static com.facebook.presto.nativeworker.PrestoNativeQueryRunnerUtils.HiveQueryRunnerBuilder;
 import static com.facebook.presto.nativeworker.PrestoNativeQueryRunnerUtils.javaHiveQueryRunnerBuilder;
 import static com.facebook.presto.nativeworker.PrestoNativeQueryRunnerUtils.nativeHiveQueryRunnerBuilder;
 import static com.facebook.presto.sidecar.NativeSidecarPluginQueryRunnerUtils.setupNativeSidecarPlugin;
@@ -24,10 +27,12 @@ public class NativeTestsUtils
 {
     private NativeTestsUtils() {}
 
-    public static QueryRunner createNativeQueryRunner(String storageFormat, boolean sidecarEnabled)
+    public static QueryRunner createNativeQueryRunner(String storageFormat, boolean sidecarEnabled,
+                                                      Optional<HiveQueryRunnerBuilder> hiveQueryRunnerBuilderArg)
             throws Exception
     {
-        QueryRunner queryRunner = nativeHiveQueryRunnerBuilder()
+        HiveQueryRunnerBuilder hiveQueryRunnerBuilder = hiveQueryRunnerBuilderArg.isPresent() ? hiveQueryRunnerBuilderArg.get() : nativeHiveQueryRunnerBuilder();
+        QueryRunner queryRunner = hiveQueryRunnerBuilder
                 .setStorageFormat(storageFormat)
                 .setAddStorageFormatToPath(true)
                 .setUseThrift(true)

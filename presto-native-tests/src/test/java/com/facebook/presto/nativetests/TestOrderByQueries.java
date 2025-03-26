@@ -18,6 +18,8 @@ import com.facebook.presto.tests.AbstractTestOrderByQueries;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.util.Optional;
+
 import static java.lang.Boolean.parseBoolean;
 
 public class TestOrderByQueries
@@ -39,7 +41,7 @@ public class TestOrderByQueries
     @Override
     protected QueryRunner createQueryRunner() throws Exception
     {
-        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled);
+        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled, Optional.empty());
     }
 
     @Override

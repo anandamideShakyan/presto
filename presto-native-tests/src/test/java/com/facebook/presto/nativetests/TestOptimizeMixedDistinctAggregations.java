@@ -17,9 +17,12 @@ package com.facebook.presto.nativetests;
 import com.facebook.presto.testing.QueryRunner;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
 
+import java.util.Optional;
+
+import static com.facebook.presto.Session.builder;
 import static com.facebook.presto.nativeworker.PrestoNativeQueryRunnerUtils.nativeHiveQueryRunnerBuilder;
-import static com.facebook.presto.sidecar.NativeSidecarPluginQueryRunnerUtils.setupNativeSidecarPlugin;
 import static java.lang.Boolean.parseBoolean;
 
 public class TestOptimizeMixedDistinctAggregations
@@ -42,23 +45,37 @@ public class TestOptimizeMixedDistinctAggregations
     @Override
     protected QueryRunner createQueryRunner() throws Exception
     {
-        QueryRunner queryRunner = nativeHiveQueryRunnerBuilder()
-                .setStorageFormat(storageFormat)
-                .setAddStorageFormatToPath(true)
-                .setUseThrift(true)
-                .setCoordinatorSidecarEnabled(sidecarEnabled)
-                .setExtraCoordinatorProperties(
-                        ImmutableMap.of("optimizer.optimize-mixed-distinct-aggregations", "true"))
-                .build();
-        if (sidecarEnabled) {
-            setupNativeSidecarPlugin(queryRunner);
-        }
-        return queryRunner;
+        return NativeTestsUtils.createNativeQueryRunner(storageFormat, sidecarEnabled, Optional.of(nativeHiveQueryRunnerBuilder().setExtraCoordinatorProperties(
+                        ImmutableMap.<String, String>builder().put("optimizer.optimize-mixed-distinct-aggregations", "true").build())));
     }
 
     @Override
     protected void createTables()
     {
         NativeTestsUtils.createTables(storageFormat);
+    }
+
+    @Override
+    @Test
+    public void testCountDistinct()
+    {
+        assertQuery("SELECT COUNT(DISTINCT custkey + 1) FROM orders", "SELECT COUNT(*) FROM (SELECT DISTINCT custkey + 1 FROM orders) t");
+        if (sidecarEnabled) {
+            assertQuery("SELECT COUNT(DISTINCT linenumber), COUNT(*) from lineitem where linenumber < 0", "VALUES (0, NULL)");
+        }
+        else {
+            assertQuery("SELECT COUNT(DISTINCT linenumber), COUNT(*) from lineitem where linenumber < 0");
+        }
+        assertQuery(" SELECT COUNT(*) FROM (SELECT orderkey, COUNT(DISTINCT partkey) FROM lineitem " +
+                        "  GROUP BY orderkey " +
+                        "HAVING COUNT(DISTINCT partkey) != CARDINALITY(ARRAY_DISTINCT(ARRAY_AGG(partkey))))",
+                "VALUES 0");
+        assertQuery(builder(getSession())
+                        .setSystemProperty("use_mark_distinct", "false")
+                        .build(),
+                " SELECT COUNT(*) FROM (SELECT orderkey, COUNT(DISTINCT partkey) FROM lineitem " +
+                        "  GROUP BY orderkey " +
+                        "HAVING COUNT(DISTINCT partkey) != CARDINALITY(ARRAY_DISTINCT(ARRAY_AGG(partkey))))",
+                "VALUES 0");
     }
 }
