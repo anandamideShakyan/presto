@@ -929,14 +929,98 @@ public abstract class AbstractTestQueriesNative
     @Test(enabled = false)
     public void testTopNUnpartitionedWindow() {}
 
-    /// TODO: Change error message
-    /// no sidecar
-    /// VeloxUserError: numInput == 1 (6000 vs. 1) Expected single row of input. Received 6000 rows.
-    /// sidecar
-    /// VeloxUserError: numInput == 1 (7500 vs. 1) Expected single row of input. Received 7500 rows.
-    @Override
     @Test
-    public void testScalarSubquery() {}
+    public void testScalarSubquery()
+    {
+        // nested
+        assertQuery("SELECT (SELECT (SELECT (SELECT 1)))");
+
+        // aggregation
+        assertQuery("SELECT * FROM lineitem WHERE orderkey = \n" +
+                "(SELECT max(orderkey) FROM orders)");
+
+        // no output
+        assertQuery("SELECT * FROM lineitem WHERE orderkey = \n" +
+                "(SELECT orderkey FROM orders WHERE 0=1)");
+
+        // no output matching with null test
+        assertQuery("SELECT * FROM lineitem WHERE \n" +
+                "(SELECT orderkey FROM orders WHERE 0=1) " +
+                "is null");
+        assertQuery("SELECT * FROM lineitem WHERE \n" +
+                "(SELECT orderkey FROM orders WHERE 0=1) " +
+                "is not null");
+
+        // subquery results and in in-predicate
+        assertQuery("SELECT (SELECT 1) IN (1, 2, 3)");
+        assertQuery("SELECT (SELECT 1) IN (   2, 3)");
+
+        // multiple subqueries
+        assertQuery("SELECT (SELECT 1) = (SELECT 3)");
+        assertQuery("SELECT (SELECT 1) < (SELECT 3)");
+        assertQuery("SELECT COUNT(*) FROM lineitem WHERE " +
+                "(SELECT min(orderkey) FROM orders)" +
+                "<" +
+                "(SELECT max(orderkey) FROM orders)");
+        assertQuery("SELECT (SELECT 1), (SELECT 2), (SELECT 3)");
+
+        // distinct
+        assertQuery("SELECT DISTINCT orderkey FROM lineitem " +
+                "WHERE orderkey BETWEEN" +
+                "   (SELECT avg(orderkey) FROM orders) - 10 " +
+                "   AND" +
+                "   (SELECT avg(orderkey) FROM orders) + 10");
+
+        // subqueries with joins
+        assertQuery("SELECT o1.orderkey, COUNT(*) " +
+                "FROM orders o1 " +
+                "INNER JOIN (SELECT * FROM orders ORDER BY orderkey LIMIT 10) o2 " +
+                "ON o1.orderkey " +
+                "BETWEEN (SELECT avg(orderkey) FROM orders) - 10 AND (SELECT avg(orderkey) FROM orders) + 10 " +
+                "GROUP BY o1.orderkey");
+        assertQuery("SELECT o1.orderkey, COUNT(*) " +
+                "FROM (SELECT * FROM orders ORDER BY orderkey LIMIT 5) o1 " +
+                "LEFT JOIN (SELECT * FROM orders ORDER BY orderkey LIMIT 10) o2 " +
+                "ON o1.orderkey " +
+                "BETWEEN (SELECT avg(orderkey) FROM orders) - 10 AND (SELECT avg(orderkey) FROM orders) + 10 " +
+                "GROUP BY o1.orderkey");
+        assertQuery("SELECT o1.orderkey, COUNT(*) " +
+                "FROM orders o1 RIGHT JOIN (SELECT * FROM orders ORDER BY orderkey LIMIT 10) o2 " +
+                "ON o1.orderkey " +
+                "BETWEEN (SELECT avg(orderkey) FROM orders) - 10 AND (SELECT avg(orderkey) FROM orders) + 10 " +
+                "GROUP BY o1.orderkey");
+        assertQuery("SELECT DISTINCT COUNT(*) " +
+                        "FROM (SELECT * FROM orders ORDER BY orderkey LIMIT 5) o1 " +
+                        "FULL JOIN (SELECT * FROM orders ORDER BY orderkey LIMIT 10) o2 " +
+                        "ON o1.orderkey " +
+                        "BETWEEN (SELECT avg(orderkey) FROM orders) - 10 AND (SELECT avg(orderkey) FROM orders) + 10 " +
+                        "GROUP BY o1.orderkey",
+                "VALUES 1, 10");
+
+        // subqueries with ORDER BY
+        assertQuery("SELECT orderkey, totalprice FROM orders ORDER BY (SELECT 2)");
+
+        // subquery returns multiple rows
+        String multipleRowsErrorMsg = ".*Expected single row of input.*";
+        assertQueryFails("SELECT * FROM lineitem WHERE orderkey = (\n" +
+                        "SELECT orderkey FROM orders ORDER BY totalprice)",
+                multipleRowsErrorMsg);
+        assertQueryFails("SELECT orderkey, totalprice FROM orders ORDER BY (VALUES 1, 2)",
+                multipleRowsErrorMsg);
+
+        // exposes a bug in optimize hash generation because EnforceSingleNode does not
+        // support more than one column from the underlying query
+        assertQuery("SELECT custkey, (SELECT DISTINCT custkey FROM orders ORDER BY custkey LIMIT 1) FROM orders");
+
+        // cast scalar sub-query
+        assertQuery("SELECT 1.0/(SELECT 1), CAST(1.0 AS REAL)/(SELECT 1), 1/(SELECT 1)");
+        assertQuery("SELECT 1.0 = (SELECT 1) AND 1 = (SELECT 1), 2.0 = (SELECT 1) WHERE 1.0 = (SELECT 1) AND 1 = (SELECT 1)");
+        assertQuery("SELECT 1.0 = (SELECT 1), 2.0 = (SELECT 1), CAST(2.0 AS REAL) = (SELECT 1) WHERE 1.0 = (SELECT 1)");
+
+        // coerce correlated symbols
+        assertQuery("SELECT * FROM (VALUES 1) t(a) WHERE 1=(SELECT count(*) WHERE 1.0 = a)", "SELECT 1");
+        assertQuery("SELECT * FROM (VALUES 1.0) t(a) WHERE 1=(SELECT count(*) WHERE 1 = a)", "SELECT 1.0");
+    }
 
     /// TODO: Result mismatch only with sidecar disabled
     /// not equal
