@@ -247,6 +247,7 @@ public class ContainerQueryRunner
     {
         return createCoordinator(true, false);
     }
+
     private GenericContainer<?> createCoordinator(boolean isNativeCluster, boolean isSidecarEnabled)
             throws IOException
     {
