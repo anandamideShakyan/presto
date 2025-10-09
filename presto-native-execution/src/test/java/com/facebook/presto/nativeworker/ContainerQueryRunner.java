@@ -88,33 +88,15 @@ public class ContainerQueryRunner
     public ContainerQueryRunner()
             throws InterruptedException, IOException
     {
-        this(DEFAULT_COORDINATOR_PORT, TPCH_CATALOG, TINY_SCHEMA, DEFAULT_NUMBER_OF_WORKERS);
+        this(DEFAULT_COORDINATOR_PORT, TPCH_CATALOG, TINY_SCHEMA, DEFAULT_NUMBER_OF_WORKERS, true, false);
     }
 
-    public ContainerQueryRunner(int coordinatorPort, String catalog, String schema, int numberOfWorkers)
+    public ContainerQueryRunner(int coordinatorPort, String catalog, String schema, int numberOfWorkers, boolean isNativeCluster, boolean isSidecarEnabled)
             throws InterruptedException, IOException
     {
         this.coordinatorPort = coordinatorPort;
         this.catalog = catalog;
         this.schema = schema;
-        this.numberOfWorkers = numberOfWorkers;
-        this.sidecar = Optional.empty();
-
-        this.coordinator = createCoordinator();
-        coordinator.start();
-        startWorkers(numberOfWorkers, true, false);
-
-        startCoordinatorAndLogUI();
-        initializeConnection();
-        cleanupDirectories(numberOfWorkers, true, false);
-    }
-
-    public ContainerQueryRunner(int numberOfWorkers, boolean isNativeCluster, boolean isSidecarEnabled)
-            throws IOException, InterruptedException
-    {
-        this.coordinatorPort = DEFAULT_COORDINATOR_PORT;
-        this.catalog = TPCH_CATALOG;
-        this.schema = TINY_SCHEMA;
         this.numberOfWorkers = numberOfWorkers;
 
         this.coordinator = createCoordinator(isNativeCluster, isSidecarEnabled);
@@ -146,7 +128,7 @@ public class ContainerQueryRunner
 
         if (isNativeCluster) {
             for (int i = 0; i < numberOfWorkers; i++) {
-                workers.add(createNativeWorker(7777 + i, "native-worker-" + i, isSidecarEnabled, false));
+                workers.add(createNativeWorker(7777 + i, "native-worker-" + i, true, isSidecarEnabled, false));
             }
         }
         else {
@@ -156,6 +138,69 @@ public class ContainerQueryRunner
         }
 
         workers.forEach(GenericContainer::start);
+    }
+
+    private GenericContainer<?> createCoordinator(boolean isNativeCluster, boolean isSidecarEnabled)
+            throws IOException
+    {
+        ContainerQueryRunnerUtils.createCoordinatorTpchProperties();
+        ContainerQueryRunnerUtils.createCoordinatorTpcdsProperties();
+        ContainerQueryRunnerUtils.createCoordinatorConfigProperties(coordinatorPort, isNativeCluster, isSidecarEnabled);
+        if (isSidecarEnabled && isNativeCluster) {
+            ContainerQueryRunnerUtils.createCoordinatorSidecarProperties();
+        }
+        ContainerQueryRunnerUtils.createCoordinatorJvmConfig();
+        ContainerQueryRunnerUtils.createCoordinatorLogProperties();
+        ContainerQueryRunnerUtils.createCoordinatorNodeProperties();
+        ContainerQueryRunnerUtils.createCoordinatorEntryPointScript();
+
+        return new GenericContainer<>(PRESTO_COORDINATOR_IMAGE)
+                .withExposedPorts(coordinatorPort)
+                .withNetwork(isNativeCluster ? network : networkExpected)
+                .withNetworkAliases("presto-coordinator")
+                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/coordinator/etc"), "/opt/presto-server/etc")
+                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/coordinator/entrypoint.sh"), "/opt/entrypoint.sh")
+                .waitingFor(Wait.forLogMessage(".*======== SERVER STARTED ========.*", 1))
+                .withStartupTimeout(Duration.ofSeconds(Long.parseLong(CONTAINER_TIMEOUT)));
+    }
+
+    private GenericContainer<?> createJavaWorker(int port, String nodeId)
+            throws IOException
+    {
+        ContainerQueryRunnerUtils.createJavaWorkerConfigProperties(port, coordinatorPort, nodeId);
+        ContainerQueryRunnerUtils.createNativeWorkerTpchProperties(nodeId);
+        ContainerQueryRunnerUtils.createJavaEntryPointScript(nodeId);
+        ContainerQueryRunnerUtils.createNativeWorkerNodeProperties(nodeId);
+        return new GenericContainer<>(PRESTO_COORDINATOR_IMAGE)
+                .withExposedPorts(port)
+                .withNetwork(networkExpected)
+                .withNetworkAliases(nodeId)
+                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/etc"), "/opt/presto-server/etc")
+                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/entrypoint.sh"), "/opt/entrypoint.sh");
+    }
+
+    private GenericContainer<?> createSidecar(int port, String nodeId, boolean isNativeCluster)
+            throws IOException
+    {
+        return createNativeWorker(port, nodeId, isNativeCluster, true, true);
+    }
+
+    private GenericContainer<?> createNativeWorker(int port, String nodeId, boolean isNativeCluster, boolean isSidecarEnabled, boolean isSidecarNode)
+            throws IOException
+    {
+        ContainerQueryRunnerUtils.createNativeWorkerConfigProperties(coordinatorPort, nodeId, isSidecarEnabled, isSidecarNode);
+        if (!isSidecarEnabled) {
+            ContainerQueryRunnerUtils.createNativeWorkerTpchProperties(nodeId);
+        }
+        ContainerQueryRunnerUtils.createNativeWorkerEntryPointScript(nodeId);
+        ContainerQueryRunnerUtils.createNativeWorkerNodeProperties(nodeId);
+        return new GenericContainer<>(PRESTO_WORKER_IMAGE)
+                .withExposedPorts(port)
+                .withNetwork(isNativeCluster ? network : networkExpected)
+                .withNetworkAliases(nodeId)
+                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/etc"), "/opt/presto-server/etc")
+                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/entrypoint.sh"), "/opt/entrypoint.sh")
+                .waitingFor(Wait.forLogMessage(".*Announcement succeeded: HTTP 202.*", 1));
     }
 
     private void cleanupDirectories(int numberOfWorkers, boolean isNativeCluster, boolean isSidecarEnabled)
@@ -240,81 +285,6 @@ public class ContainerQueryRunner
         }
 
         throw new RuntimeException("Coordinator did not become ACTIVE in time.");
-    }
-
-    private GenericContainer<?> createCoordinator()
-            throws IOException
-    {
-        return createCoordinator(true, false);
-    }
-
-    private GenericContainer<?> createCoordinator(boolean isNativeCluster, boolean isSidecarEnabled)
-            throws IOException
-    {
-        ContainerQueryRunnerUtils.createCoordinatorTpchProperties();
-        ContainerQueryRunnerUtils.createCoordinatorTpcdsProperties();
-        ContainerQueryRunnerUtils.createCoordinatorConfigProperties(coordinatorPort, isNativeCluster, isSidecarEnabled);
-        if (isSidecarEnabled && isNativeCluster) {
-            ContainerQueryRunnerUtils.createCoordinatorSidecarProperties();
-        }
-        ContainerQueryRunnerUtils.createCoordinatorJvmConfig();
-        ContainerQueryRunnerUtils.createCoordinatorLogProperties();
-        ContainerQueryRunnerUtils.createCoordinatorNodeProperties();
-        ContainerQueryRunnerUtils.createCoordinatorEntryPointScript();
-
-        return new GenericContainer<>(PRESTO_COORDINATOR_IMAGE)
-                .withExposedPorts(coordinatorPort)
-                .withNetwork(isNativeCluster ? network : networkExpected)
-                .withNetworkAliases("presto-coordinator")
-                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/coordinator/etc"), "/opt/presto-server/etc")
-                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/coordinator/entrypoint.sh"), "/opt/entrypoint.sh")
-                .waitingFor(Wait.forLogMessage(".*======== SERVER STARTED ========.*", 1))
-                .withStartupTimeout(Duration.ofSeconds(Long.parseLong(CONTAINER_TIMEOUT)));
-    }
-
-    private GenericContainer<?> createJavaWorker(int port, String nodeId)
-            throws IOException
-    {
-        ContainerQueryRunnerUtils.createJavaWorkerConfigProperties(port, coordinatorPort, nodeId);
-        ContainerQueryRunnerUtils.createNativeWorkerTpchProperties(nodeId);
-        ContainerQueryRunnerUtils.createJavaEntryPointScript(nodeId);
-        ContainerQueryRunnerUtils.createNativeWorkerNodeProperties(nodeId);
-        return new GenericContainer<>(PRESTO_COORDINATOR_IMAGE)
-                .withExposedPorts(port)
-                .withNetwork(networkExpected)
-                .withNetworkAliases(nodeId)
-                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/etc"), "/opt/presto-server/etc")
-                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/entrypoint.sh"), "/opt/entrypoint.sh");
-    }
-
-    private GenericContainer<?> createSidecar(int port, String nodeId, boolean isNativeCluster)
-            throws IOException
-    {
-        return createNativeWorker(port, nodeId, isNativeCluster, true, true);
-    }
-
-    private GenericContainer<?> createNativeWorker(int port, String nodeId, boolean isSidecarEnabled, boolean isSidecarNode)
-            throws IOException
-    {
-        return createNativeWorker(port, nodeId, true, isSidecarEnabled, isSidecarNode);
-    }
-
-    private GenericContainer<?> createNativeWorker(int port, String nodeId, boolean isNativeCluster, boolean isSidecarEnabled, boolean isSidecarNode)
-            throws IOException
-    {
-        ContainerQueryRunnerUtils.createNativeWorkerConfigProperties(coordinatorPort, nodeId, isSidecarEnabled, isSidecarNode);
-        if (!isSidecarEnabled) {
-            ContainerQueryRunnerUtils.createNativeWorkerTpchProperties(nodeId);
-        }
-        ContainerQueryRunnerUtils.createNativeWorkerEntryPointScript(nodeId);
-        ContainerQueryRunnerUtils.createNativeWorkerNodeProperties(nodeId);
-        return new GenericContainer<>(PRESTO_WORKER_IMAGE)
-                .withExposedPorts(port)
-                .withNetwork(isNativeCluster ? network : networkExpected)
-                .withNetworkAliases(nodeId)
-                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/etc"), "/opt/presto-server/etc")
-                .withCopyFileToContainer(MountableFile.forHostPath(BASE_DIR + "/testcontainers/" + nodeId + "/entrypoint.sh"), "/opt/entrypoint.sh")
-                .waitingFor(Wait.forLogMessage(".*Announcement succeeded: HTTP 202.*", 1));
     }
 
     @Override
