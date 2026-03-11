@@ -70,7 +70,7 @@ class KllSketchRankTest : public AggregationTestBase {
                   .project({query})
                   .planNode();
     
-    return readSingleValue(op).value<TypeKind::DOUBLE>();
+    return readSingleValue(op).template value<TypeKind::DOUBLE>();
   }
 };
 

@@ -371,15 +371,7 @@ velox::exec::AggregateRegistrationResult registerKllSketchAggregate(
   std::string returnType = "varbinary";
   std::string intermediateType = "varbinary";
 
-  for (const auto& inputType :
-       {"tinyint",
-        "smallint",
-        "integer",
-        "bigint",
-        "real",
-        "double",
-        "varchar",
-        "boolean"}) {
+  for (const auto& inputType : {"bigint", "double", "varchar", "boolean"}) {
     signatures.push_back(
         velox::exec::AggregateFunctionSignatureBuilder()
             .returnType(returnType)
@@ -404,21 +396,9 @@ velox::exec::AggregateRegistrationResult registerKllSketchAggregate(
         auto inputType = argTypes[0];
         if (velox::exec::isRawInput(step)) {
           switch (inputType->kind()) {
-            case velox::TypeKind::TINYINT:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchAggregate<int8_t>>>(step, argTypes, resultType);
-            case velox::TypeKind::SMALLINT:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchAggregate<int16_t>>>(step, argTypes, resultType);
-            case velox::TypeKind::INTEGER:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchAggregate<int32_t>>>(step, argTypes, resultType);
             case velox::TypeKind::BIGINT:
               return std::make_unique<velox::exec::SimpleAggregateAdapter<
                   KllSketchAggregate<int64_t>>>(step, argTypes, resultType);
-            case velox::TypeKind::REAL:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchAggregate<float>>>(step, argTypes, resultType);
             case velox::TypeKind::DOUBLE:
               return std::make_unique<velox::exec::SimpleAggregateAdapter<
                   KllSketchAggregate<double>>>(step, argTypes, resultType);
@@ -456,15 +436,7 @@ velox::exec::AggregateRegistrationResult registerKllSketchWithKAggregate(
   std::string returnType = "varbinary";
   std::string intermediateType = "varbinary";
 
-  for (const auto& inputType :
-       {"tinyint",
-        "smallint",
-        "integer",
-        "bigint",
-        "real",
-        "double",
-        "varchar",
-        "boolean"}) {
+  for (const auto& inputType : {"bigint", "double", "varchar", "boolean"}) {
     signatures.push_back(
         velox::exec::AggregateFunctionSignatureBuilder()
             .returnType(returnType)
@@ -490,21 +462,9 @@ velox::exec::AggregateRegistrationResult registerKllSketchWithKAggregate(
         auto inputType = argTypes[0];
         if (velox::exec::isRawInput(step)) {
           switch (inputType->kind()) {
-            case velox::TypeKind::TINYINT:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchWithKAggregate<int8_t>>>(step, argTypes, resultType);
-            case velox::TypeKind::SMALLINT:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchWithKAggregate<int16_t>>>(step, argTypes, resultType);
-            case velox::TypeKind::INTEGER:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchWithKAggregate<int32_t>>>(step, argTypes, resultType);
             case velox::TypeKind::BIGINT:
               return std::make_unique<velox::exec::SimpleAggregateAdapter<
                   KllSketchWithKAggregate<int64_t>>>(step, argTypes, resultType);
-            case velox::TypeKind::REAL:
-              return std::make_unique<velox::exec::SimpleAggregateAdapter<
-                  KllSketchWithKAggregate<float>>>(step, argTypes, resultType);
             case velox::TypeKind::DOUBLE:
               return std::make_unique<velox::exec::SimpleAggregateAdapter<
                   KllSketchWithKAggregate<double>>>(step, argTypes, resultType);
