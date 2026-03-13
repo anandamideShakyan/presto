@@ -16,116 +16,145 @@
 
 #include "DataSketches/kll_sketch.hpp"
 
-#include "velox/velox/functions/Macros.h"
-#include "velox/velox/functions/Registerer.h"
+#include "velox/expression/VectorFunction.h"
+#include "velox/functions/Registerer.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::presto::functions {
 
 namespace {
 
-// Helper to convert input value to sketch-compatible type
-template <typename SketchType, typename InputType>
-inline SketchType convertToSketchType(const InputType& value) {
-  return static_cast<SketchType>(value);
-}
+// Generic sketch_kll_quantile function template
+template <typename SketchType, typename OutputType>
+class KllSketchQuantileFunctionTyped : public velox::exec::VectorFunction {
+ public:
+  void apply(
+      const velox::SelectivityVector& rows,
+      std::vector<velox::VectorPtr>& args,
+      const velox::TypePtr& outputType,
+      velox::exec::EvalCtx& context,
+      velox::VectorPtr& result) const override {
+    VELOX_CHECK_GE(args.size(), 2);
+    VELOX_CHECK_LE(args.size(), 3);
 
-// Specialization for VARCHAR -> std::string conversion
-template <>
-inline std::string convertToSketchType<std::string, velox::StringView>(
-    const velox::StringView& value) {
-  return std::string(value.data(), static_cast<std::string::size_type>(value.size()));
-}
+    auto sketchVector = args[0]->as<velox::SimpleVector<velox::StringView>>();
+    auto rankVector = args[1]->as<velox::SimpleVector<double>>();
+    auto inclusiveVector =
+        args.size() == 3 ? args[2]->as<velox::SimpleVector<bool>>() : nullptr;
 
-// Generic sketch_kll_rank function with inclusive parameter
-template <typename SketchType, typename QuantileType>
-struct KllSketchRankFunction {
-  template <typename TExec>
-  struct udf {
-    VELOX_DEFINE_FUNCTION_TYPES(TExec);
+    context.ensureWritable(rows, outputType, result);
 
-    FOLLY_ALWAYS_INLINE void call(
-        out_type<double>& result,
-        const arg_type<velox::Varbinary>& rawSketch,
-        const arg_type<QuantileType>& quantile,
-        const arg_type<bool>& inclusive) {
+    rows.applyToSelected([&](velox::vector_size_t row) {
+      if (sketchVector->isNullAt(row) || rankVector->isNullAt(row)) {
+        result->setNull(row, true);
+        return;
+      }
 
-      auto sketch = datasketches::kll_sketch<SketchType>::deserialize(
-          rawSketch.data(), rawSketch.size());
-
-      auto sketchQuantile = convertToSketchType<SketchType>(quantile);
-
-      result = sketch.get_rank(sketchQuantile, inclusive);
-    }
-  };
-};
-
-// Generic sketch_kll_rank function with default inclusive=true
-template <typename SketchType, typename QuantileType>
-struct KllSketchRankDefaultFunction {
-  template <typename TExec>
-  struct udf {
-    VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-    FOLLY_ALWAYS_INLINE void call(
-        out_type<double>& result,
-        const arg_type<velox::Varbinary>& rawSketch,
-        const arg_type<QuantileType>& quantile) {
+      auto sketchData = sketchVector->valueAt(row);
+      double rank = rankVector->valueAt(row);
+      bool inclusive = inclusiveVector ? inclusiveVector->valueAt(row) : true;
 
       auto sketch = datasketches::kll_sketch<SketchType>::deserialize(
-          rawSketch.data(), rawSketch.size());
+          sketchData.data(), sketchData.size());
+      auto quantile = sketch.get_quantile(rank, inclusive);
 
-      auto sketchQuantile = convertToSketchType<SketchType>(quantile);
-
-      result = sketch.get_rank(sketchQuantile, true);
-    }
-  };
+      if constexpr (std::is_same_v<OutputType, velox::StringView>) {
+        // For VARCHAR, need to copy string data
+        result->as<velox::FlatVector<velox::StringView>>()->set(
+            row, velox::StringView(quantile));
+      } else {
+        result->as<velox::FlatVector<OutputType>>()->set(row, quantile);
+      }
+    });
+  }
 };
 
-// Type aliases for cleaner registration
-using KllSketchRankDouble =
-    KllSketchRankFunction<double, double>;
-
-using KllSketchRankDoubleDefault =
-    KllSketchRankDefaultFunction<double, double>;
-
-using KllSketchRankBigint =
-    KllSketchRankFunction<int64_t, int64_t>;
-
-using KllSketchRankBigintDefault =
-    KllSketchRankDefaultFunction<int64_t, int64_t>;
-
-using KllSketchRankVarchar =
-    KllSketchRankFunction<std::string, velox::Varchar>;
-
-using KllSketchRankVarcharDefault =
-    KllSketchRankDefaultFunction<std::string, velox::Varchar>;
-
-using KllSketchRankBoolean =
-    KllSketchRankFunction<bool, bool>;
-
-using KllSketchRankBooleanDefault =
-    KllSketchRankDefaultFunction<bool, bool>;
+// Factory functions for each type
+template <typename SketchType, typename OutputType>
+std::shared_ptr<velox::exec::VectorFunction> makeKllSketchQuantileTyped(
+    const std::string& /*name*/,
+    const std::vector<velox::exec::VectorFunctionArg>& /*inputArgs*/,
+    const velox::core::QueryConfig& /*config*/) {
+  return std::make_shared<
+      KllSketchQuantileFunctionTyped<SketchType, OutputType>>();
+}
 
 } // namespace
 
 void registerKllSketchFunctions(const std::string& prefix) {
-  const std::string funcName = prefix + "sketch_kll_rank";
+  // Note: Using different function names for different types as a workaround
+  // for Velox's limitation of only checking input types (not return types)
+  // for function overloading.
+  //
+  // TODO: Once kllsketch is registered as a parametric type in Velox,
+  // these can be unified under a single "sketch_kll_quantile" name.
 
-  // Register DOUBLE variants
-  velox::registerFunction<KllSketchRankDouble, double, velox::Varbinary, double, bool>({funcName});
-  velox::registerFunction<KllSketchRankDoubleDefault, double, velox::Varbinary, double>({funcName});
+  // Register DOUBLE variants: sketch_kll_quantile (default for backward
+  // compatibility) Register both signatures together
+  velox::exec::registerStatefulVectorFunction(
+      prefix + "sketch_kll_quantile",
+      {velox::exec::FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .argumentType("boolean")
+           .build(),
+       velox::exec::FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .build()},
+      makeKllSketchQuantileTyped<double, double>);
 
-  // Register BIGINT variants
-  velox::registerFunction<KllSketchRankBigint, double, velox::Varbinary, int64_t, bool>({funcName});
-  velox::registerFunction<KllSketchRankBigintDefault, double, velox::Varbinary, int64_t>({funcName});
+  // Register BIGINT variants: sketch_kll_quantile_bigint
+  velox::exec::registerStatefulVectorFunction(
+      prefix + "sketch_kll_quantile_bigint",
+      {velox::exec::FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .argumentType("boolean")
+           .build(),
+       velox::exec::FunctionSignatureBuilder()
+           .returnType("bigint")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .build()},
+      makeKllSketchQuantileTyped<int64_t, int64_t>);
 
-  // Register VARCHAR variants
-  velox::registerFunction<KllSketchRankVarchar, double, velox::Varbinary, velox::Varchar, bool>({funcName});
-  velox::registerFunction<KllSketchRankVarcharDefault, double, velox::Varbinary, velox::Varchar>({funcName});
+  // Register VARCHAR variants: sketch_kll_quantile_varchar
+  velox::exec::registerStatefulVectorFunction(
+      prefix + "sketch_kll_quantile_varchar",
+      {velox::exec::FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .argumentType("boolean")
+           .build(),
+       velox::exec::FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .build()},
+      makeKllSketchQuantileTyped<std::string, velox::StringView>);
 
-  // Register BOOLEAN variants
-  velox::registerFunction<KllSketchRankBoolean, double, velox::Varbinary, bool, bool>({funcName});
-  velox::registerFunction<KllSketchRankBooleanDefault, double, velox::Varbinary, bool>({funcName});
+  // Register BOOLEAN variants: sketch_kll_quantile_boolean
+  velox::exec::registerStatefulVectorFunction(
+      prefix + "sketch_kll_quantile_boolean",
+      {velox::exec::FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .argumentType("boolean")
+           .build(),
+       velox::exec::FunctionSignatureBuilder()
+           .returnType("boolean")
+           .argumentType("varbinary")
+           .argumentType("double")
+           .build()},
+      makeKllSketchQuantileTyped<bool, bool>);
 }
 
 } // namespace facebook::presto::functions
+
+// Made with Bob

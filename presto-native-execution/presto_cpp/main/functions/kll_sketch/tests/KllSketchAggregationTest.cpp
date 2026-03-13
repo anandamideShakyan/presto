@@ -27,7 +27,7 @@ using namespace datasketches;
 
 namespace facebook::presto::functions::aggregate::test {
 namespace {
-class KllSketchRankTest : public AggregationTestBase {
+class KllSketchQuantileTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     folly::SingletonVault::singleton()->registrationComplete();
@@ -48,100 +48,137 @@ class KllSketchRankTest : public AggregationTestBase {
         reinterpret_cast<const char*>(serialized.data()), serialized.size());
   }
 
-  // Helper to test rank function
+  // Helper to test quantile function for numeric types
   template <typename T>
-  double testRank(const std::vector<T>& values, T queryValue, bool inclusive = true) {
+  T testQuantile(
+      const std::vector<T>& values,
+      double rank,
+      bool inclusive = true,
+      const std::string& funcName = "sketch_kll_quantile") {
     auto sketch = createSerializedSketch(values);
-    auto input = makeRowVector({makeFlatVector<std::string>({sketch}, VARBINARY())});
-    
-    std::string query;
-    if constexpr (std::is_same_v<T, std::string>) {
-      query = fmt::format("sketch_kll_rank(c0, '{}'{})", queryValue, inclusive ? "" : ", false");
+    auto input =
+        makeRowVector({makeFlatVector<std::string>({sketch}, VARBINARY())});
+
+    std::string query = fmt::format(
+        "{}(c0, CAST({} AS DOUBLE){})",
+        funcName,
+        rank,
+        inclusive ? "" : ", false");
+
+    auto op = PlanBuilder().values({input}).project({query}).planNode();
+
+    if constexpr (std::is_same_v<T, double>) {
+      return readSingleValue(op).template value<TypeKind::DOUBLE>();
+    } else if constexpr (std::is_same_v<T, int64_t>) {
+      return readSingleValue(op).template value<TypeKind::BIGINT>();
     } else if constexpr (std::is_same_v<T, bool>) {
-      query = fmt::format("sketch_kll_rank(c0, {}{})", queryValue ? "true" : "false", inclusive ? "" : ", false");
-    } else if constexpr (std::is_same_v<T, double>) {
-      query = fmt::format("sketch_kll_rank(c0, CAST({} AS DOUBLE){})", queryValue, inclusive ? "" : ", false");
-    } else {
-      query = fmt::format("sketch_kll_rank(c0, CAST({} AS BIGINT){})", queryValue, inclusive ? "" : ", false");
+      return readSingleValue(op).template value<TypeKind::BOOLEAN>();
     }
-    
-    auto op = PlanBuilder()
-                  .values({input})
-                  .project({query})
-                  .planNode();
-    
-    return readSingleValue(op).template value<TypeKind::DOUBLE>();
+  }
+
+  // Helper to test quantile function for VARCHAR type
+  std::string testQuantileString(
+      const std::vector<std::string>& values,
+      double rank,
+      bool inclusive = true) {
+    auto sketch = createSerializedSketch(values);
+    auto input =
+        makeRowVector({makeFlatVector<std::string>({sketch}, VARBINARY())});
+
+    std::string query = fmt::format(
+        "sketch_kll_quantile_varchar(c0, CAST({} AS DOUBLE){})",
+        rank,
+        inclusive ? "" : ", false");
+
+    auto op = PlanBuilder().values({input}).project({query}).planNode();
+
+    auto result = readSingleValue(op).template value<TypeKind::VARCHAR>();
+    return std::string(result.data(), result.size());
   }
 };
 
 // ============================================================================
-// Test Doubles - sketch_kll_rank for DOUBLE type
+// Test Doubles - sketch_kll_quantile for DOUBLE type
 // ============================================================================
-TEST_F(KllSketchRankTest, testDoubles) {
-  // Create sketch with values 0-99 (matches Java test)
+TEST_F(KllSketchQuantileTest, testDoubles) {
+  // Create sketch with values 0-99
   std::vector<double> values;
   for (int i = 0; i < 100; i++) {
     values.push_back(static_cast<double>(i));
   }
 
-  // Test sketch_kll_rank
-  EXPECT_NEAR(testRank(values, -1.0), 0.0, 0.01);
-  EXPECT_NEAR(testRank(values, 49.0), 0.5, 0.02);
-  EXPECT_NEAR(testRank(values, 50.0, false), 0.5, 0.02);
-  EXPECT_NEAR(testRank(values, 99.0), 1.0, 0.01);
+  // Test sketch_kll_quantile (default returns double)
+  EXPECT_NEAR(testQuantile(values, 0.0), 0.0, 1.0);
+  EXPECT_NEAR(testQuantile(values, 0.5), 49.5, 2.0);
+  EXPECT_NEAR(testQuantile(values, 0.5, false), 49.5, 2.0);
+  EXPECT_NEAR(testQuantile(values, 1.0), 99.0, 1.0);
 }
 
 // ============================================================================
-// Test Ints - sketch_kll_rank for BIGINT type
+// Test Ints - sketch_kll_quantile_bigint for BIGINT type
 // ============================================================================
-TEST_F(KllSketchRankTest, testInts) {
-  // Create sketch with values 0-99 (matches Java test)
+TEST_F(KllSketchQuantileTest, testInts) {
+  // Create sketch with values 0-99
   std::vector<int64_t> values;
   for (int64_t i = 0; i < 100; i++) {
     values.push_back(i);
   }
 
-  // Test sketch_kll_rank
-  EXPECT_NEAR(testRank(values, (int64_t)-1), 0.0, 0.01);
-  EXPECT_NEAR(testRank(values, (int64_t)49), 0.5, 0.02);
-  EXPECT_NEAR(testRank(values, (int64_t)50, false), 0.5, 0.02);
-  EXPECT_NEAR(testRank(values, (int64_t)99), 1.0, 0.01);
+  // Test sketch_kll_quantile_bigint
+  EXPECT_NEAR(
+      testQuantile(values, 0.0, true, "sketch_kll_quantile_bigint"), 0, 1);
+  EXPECT_NEAR(
+      testQuantile(values, 0.5, true, "sketch_kll_quantile_bigint"), 49, 2);
+  EXPECT_NEAR(
+      testQuantile(values, 0.5, false, "sketch_kll_quantile_bigint"), 49, 2);
+  EXPECT_NEAR(
+      testQuantile(values, 1.0, true, "sketch_kll_quantile_bigint"), 99, 1);
 }
 
 // ============================================================================
-// Test Strings - sketch_kll_rank for VARCHAR type
+// Test Strings - sketch_kll_quantile_varchar for VARCHAR type
 // ============================================================================
-TEST_F(KllSketchRankTest, testStrings) {
-  // Create sketch with letters a-z (matches Java test)
+TEST_F(KllSketchQuantileTest, testStrings) {
+  // Create sketch with letters a-z
   std::vector<std::string> values;
   for (char c = 'a'; c <= 'z'; c++) {
     values.push_back(std::string(1, c));
   }
 
-  // Test sketch_kll_rank
-  EXPECT_NEAR(testRank(values, std::string("1")), 0.0, 0.01);
-  EXPECT_NEAR(testRank(values, std::string("m")), 0.5, 0.05);
-  EXPECT_NEAR(testRank(values, std::string("n"), false), 0.5, 0.05);
-  EXPECT_NEAR(testRank(values, std::string("z")), 1.0, 0.01);
+  // Test sketch_kll_quantile_varchar
+  auto q0 = testQuantileString(values, 0.0);
+  auto q50 = testQuantileString(values, 0.5);
+  auto q50_excl = testQuantileString(values, 0.5, false);
+  auto q100 = testQuantileString(values, 1.0);
+
+  EXPECT_EQ(q0, "a");
+  EXPECT_TRUE(q50 == "m" || q50 == "n"); // Around middle
+  EXPECT_TRUE(q50_excl == "m" || q50_excl == "n");
+  EXPECT_EQ(q100, "z");
 }
 
 // ============================================================================
-// Test Booleans - sketch_kll_rank for BOOLEAN type
+// Test Booleans - sketch_kll_quantile_boolean for BOOLEAN type
 // ============================================================================
-TEST_F(KllSketchRankTest, testBooleans) {
-  // Create sketch with pattern: every 3rd value is true (matches Java test)
+TEST_F(KllSketchQuantileTest, testBooleans) {
+  // Create sketch with pattern: every 3rd value is true
   std::vector<bool> values;
   for (int i = 0; i < 100; i++) {
     values.push_back(i % 3 == 0);
   }
 
-  // Test sketch_kll_rank
-  EXPECT_NEAR(testRank(values, false, false), 0.0, 0.01);
-  EXPECT_NEAR(testRank(values, true, false), 0.66, 0.05);
-  EXPECT_NEAR(testRank(values, false), 0.66, 0.05);
-  EXPECT_NEAR(testRank(values, true), 1.0, 0.01);
+  // Test sketch_kll_quantile_boolean
+  EXPECT_EQ(
+      testQuantile(values, 0.0, true, "sketch_kll_quantile_boolean"), false);
+  EXPECT_EQ(
+      testQuantile(values, 0.5, true, "sketch_kll_quantile_boolean"), false);
+  EXPECT_EQ(
+      testQuantile(values, 0.7, true, "sketch_kll_quantile_boolean"), true);
+  EXPECT_EQ(
+      testQuantile(values, 1.0, true, "sketch_kll_quantile_boolean"), true);
 }
 
 } // namespace
 } // namespace facebook::presto::functions::aggregate::test
 
+// Made with Bob
