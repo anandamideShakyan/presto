@@ -18,6 +18,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableMap;
 
@@ -34,29 +35,26 @@ import static com.google.common.base.Strings.isNullOrEmpty;
  * Parses the {@code add.stats} JSON field from the Delta transaction log for a single data file.
  * Keys in minValues/maxValues/nullCount are physical column names for column-mapping tables.
  * All lookups are case-insensitive.
+ *
+ * @see <a href="https://github.com/delta-io/delta/blob/master/PROTOCOL.md#per-file-statistics">Delta Transaction Log Protocol - Per-file Statistics</a>
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class DeltaJsonFileStatistics
         implements DeltaFileStatistics
 {
     private static final Logger log = Logger.get(DeltaJsonFileStatistics.class);
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper(); // thread-safe after construction
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
 
     private final Long numRecords;
     private final Map<String, Object> minValues;
     private final Map<String, Object> maxValues;
     private final Map<String, Object> nullCount;
 
-    private static final int MAX_STATS_JSON_LENGTH = 50_000;
-
     /** Parses a stats JSON string. Returns empty on null, blank, or malformed input — never throws. */
     public static Optional<DeltaJsonFileStatistics> create(String statsJson)
     {
         if (isNullOrEmpty(statsJson) || statsJson.trim().equals("null")) {
-            return Optional.empty();
-        }
-        if (statsJson.length() > MAX_STATS_JSON_LENGTH) {
-            log.debug("Delta file statistics JSON string is too large (%d characters), skipping statistics", statsJson.length());
             return Optional.empty();
         }
         try {

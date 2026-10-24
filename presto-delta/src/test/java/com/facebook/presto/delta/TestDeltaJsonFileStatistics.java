@@ -73,18 +73,21 @@ public class TestDeltaJsonFileStatistics
     }
 
     @Test
-    public void testCreateReturnsEmptyForOversizedJson()
+    public void testCreateParsesLargeJson()
     {
-        // Construct a huge JSON string exceeding 50,000 characters
+        // Construct a large JSON string exceeding 50,000 characters (e.g. wide tables)
         StringBuilder sb = new StringBuilder();
         sb.append("{\"numRecords\":5,\"nullCount\":{");
         for (int i = 0; i < 5000; i++) {
             sb.append("\"col").append(i).append("\":0,");
         }
         sb.append("\"id\":0}}");
-        String oversizedJson = sb.toString();
-        assertTrue(oversizedJson.length() > 50000);
-        assertFalse(DeltaJsonFileStatistics.create(oversizedJson).isPresent());
+        String largeJson = sb.toString();
+        assertTrue(largeJson.length() > 50000);
+        Optional<DeltaJsonFileStatistics> result = DeltaJsonFileStatistics.create(largeJson);
+        assertTrue(result.isPresent());
+        assertEquals(result.get().getNumRecords(), Optional.of(5L));
+        assertEquals(result.get().getNullCount("id"), Optional.of(0L));
     }
 
     @Test

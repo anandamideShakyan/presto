@@ -32,6 +32,7 @@ public class DeltaFileEntry
     private final long modificationTime;
     private final Map<String, String> partitionValues;
     private final Optional<DeltaJsonFileStatistics> stats;
+    private final long deletedRowCount;
 
     public DeltaFileEntry(
             String path,
@@ -39,6 +40,17 @@ public class DeltaFileEntry
             long modificationTime,
             Map<String, String> partitionValues,
             Optional<DeltaJsonFileStatistics> stats)
+    {
+        this(path, size, modificationTime, partitionValues, stats, 0L);
+    }
+
+    public DeltaFileEntry(
+            String path,
+            long size,
+            long modificationTime,
+            Map<String, String> partitionValues,
+            Optional<DeltaJsonFileStatistics> stats,
+            long deletedRowCount)
     {
         this.path = requireNonNull(path, "path is null");
         this.size = size;
@@ -52,6 +64,7 @@ public class DeltaFileEntry
         }
         this.partitionValues = pvBuilder.build();
         this.stats = requireNonNull(stats, "stats is null");
+        this.deletedRowCount = deletedRowCount;
     }
 
     public String getPath()
@@ -79,6 +92,11 @@ public class DeltaFileEntry
         return stats;
     }
 
+    public long getDeletedRowCount()
+    {
+        return deletedRowCount;
+    }
+
     @Override
     public String toString()
     {
@@ -88,6 +106,7 @@ public class DeltaFileEntry
                 .add("modificationTime", modificationTime)
                 .add("partitionValues", partitionValues)
                 .add("stats", stats)
+                .add("deletedRowCount", deletedRowCount)
                 .toString();
     }
 }

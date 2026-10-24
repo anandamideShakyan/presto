@@ -39,7 +39,8 @@ public class TestDeltaFileEntry
                 1024L,
                 1700000000000L,
                 ImmutableMap.of("date", "2024-01-01"),
-                stats);
+                stats,
+                2L);
 
         assertEquals(entry.getPath(), "s3://bucket/table/part-0.parquet");
         assertEquals(entry.getSize(), 1024L);
@@ -47,6 +48,20 @@ public class TestDeltaFileEntry
         assertEquals(entry.getPartitionValues(), ImmutableMap.of("date", "2024-01-01"));
         assertTrue(entry.getStats().isPresent());
         assertEquals(entry.getStats().get().getNumRecords(), Optional.of(5L));
+        assertEquals(entry.getDeletedRowCount(), 2L);
+    }
+
+    @Test
+    public void testDefaultDeletedRowCountIsZero()
+    {
+        DeltaFileEntry entry = new DeltaFileEntry(
+                "part-0.parquet",
+                1024L,
+                0L,
+                Collections.emptyMap(),
+                Optional.empty());
+
+        assertEquals(entry.getDeletedRowCount(), 0L);
     }
 
     @Test

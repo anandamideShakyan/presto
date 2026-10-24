@@ -34,6 +34,7 @@ import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.internal.InternalScanFileUtils;
 import io.delta.kernel.internal.ScanImpl;
 import io.delta.kernel.internal.SnapshotImpl;
+import io.delta.kernel.internal.actions.DeletionVectorDescriptor;
 import io.delta.kernel.utils.CloseableIterator;
 import jakarta.inject.Inject;
 import org.apache.hadoop.fs.FileSystem;
@@ -272,12 +273,16 @@ public class DeltaClient
             log.debug("Could not read stats for file %s, skipping: %s", fileStatus.getPath(), e.getMessage());
         }
 
+        DeletionVectorDescriptor dv = InternalScanFileUtils.getDeletionVectorDescriptorFromRow(row);
+        long deletedRowCount = dv == null ? 0 : dv.getCardinality();
+
         return new DeltaFileEntry(
                 fileStatus.getPath(),
                 fileStatus.getSize(),
                 fileStatus.getModificationTime(),
                 partitionValues,
-                stats);
+                stats,
+                deletedRowCount);
     }
 
     private Optional<Engine> loadDeltaEngine(ConnectorSession session, Path tableLocation,

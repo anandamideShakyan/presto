@@ -15,8 +15,10 @@ package com.facebook.presto.delta;
 
 import com.facebook.airlift.log.Logger;
 import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeManager;
-import com.facebook.presto.common.type.TypeSignature;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Constraint;
@@ -26,33 +28,34 @@ import com.facebook.presto.spi.statistics.Estimate;
 import com.facebook.presto.spi.statistics.StringRange;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableSet;
 import io.delta.kernel.utils.CloseableIterator;
 import jakarta.inject.Inject;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalDouble;
 import java.util.Set;
-import java.util.stream.Collectors;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
 import static com.facebook.presto.delta.DeltaColumnHandle.ColumnType.PARTITION;
 import static com.facebook.presto.delta.DeltaColumnHandle.ColumnType.REGULAR;
+import static com.google.common.base.MoreObjects.firstNonNull;
+import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Double.NEGATIVE_INFINITY;
-import static java.lang.Double.NaN;
 import static java.lang.Double.POSITIVE_INFINITY;
 import static java.util.Objects.requireNonNull;
 
@@ -89,8 +92,15 @@ public class DeltaTableStatisticsProvider
     @Inject
     public DeltaTableStatisticsProvider(DeltaClient deltaClient, TypeManager typeManager)
     {
-        this.deltaClient = deltaClient;
-        this.typeManager = typeManager;
+        this.deltaClient = requireNonNull(deltaClient, "deltaClient is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
+    }
+
+    @VisibleForTesting
+    DeltaTableStatisticsProvider(TypeManager typeManager)
+    {
+        this.deltaClient = null;
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     @Override
@@ -100,7 +110,7 @@ public class DeltaTableStatisticsProvider
             List<ColumnHandle> columnHandles,
             Constraint<ColumnHandle> constraint)
     {
-        requireNonNull(deltaClient, "deltaClient is null — DeltaTableStatisticsProvider was not injected correctly");
+        requireNonNull(deltaClient, "deltaClient is null");
         TupleDomain<DeltaColumnHandle> transformedConstraint = constraint.getSummary()
                 .transform(DeltaColumnHandle.class::cast);
         try (CloseableIterator<DeltaFileEntry> fileEntriesIter = deltaClient.getFileEntries(
@@ -123,213 +133,72 @@ public class DeltaTableStatisticsProvider
 
     @VisibleForTesting
     TableStatistics computeTableStatistics(
+            List<DeltaFileEntry> fileEntries,
+            DeltaTable deltaTable,
+            List<ColumnHandle> requestedColumns)
+    {
+        return computeTableStatistics(fileEntries.iterator(), deltaTable, requestedColumns);
+    }
+
+    @VisibleForTesting
+    TableStatistics computeTableStatistics(
             Iterator<DeltaFileEntry> fileEntries,
             DeltaTable deltaTable,
-            List<ColumnHandle> requestedColumnHandles)
+            List<ColumnHandle> requestedColumns)
     {
-        List<DeltaColumnHandle> columnHandles = buildColumnHandles(deltaTable.getColumns());
-        if (requestedColumnHandles != null) {
-            Set<ColumnHandle> requestedSet = ImmutableSet.copyOf(requestedColumnHandles);
-            columnHandles = columnHandles.stream()
-                    .filter(requestedSet::contains)
-                    .collect(Collectors.toList());
-        }
+        List<ColumnStatsAccumulator> columns = resolveColumns(deltaTable, requestedColumns).stream()
+                .map(column -> {
+                    Type type = typeManager.getType(column.getDataType());
+                    return column.getColumnType() == PARTITION
+                            ? new PartitionColumnAccumulator(column, type)
+                            : new RegularColumnAccumulator(column, type);
+                })
+                .collect(toImmutableList());
 
-        double totalNumRecords = 0;
-
-        // NaN = unknown null count (at least one file lacked it for this column)
-        Map<DeltaColumnHandle, Double> nullCounts = new HashMap<>();
-        columnHandles.forEach(col -> nullCounts.put(col, 0.0));
-
-        Map<DeltaColumnHandle, Double> minValues = new HashMap<>();
-        Map<DeltaColumnHandle, Double> maxValues = new HashMap<>();
-        Map<DeltaColumnHandle, Boolean> minReliable = new HashMap<>();
-        Map<DeltaColumnHandle, Boolean> maxReliable = new HashMap<>();
-        columnHandles.forEach(col -> {
-            minReliable.put(col, true);
-            maxReliable.put(col, true);
-        });
-
-        // String ranges for varchar
-        Map<DeltaColumnHandle, String> minStringValues = new HashMap<>();
-        Map<DeltaColumnHandle, String> maxStringValues = new HashMap<>();
-        Map<DeltaColumnHandle, Boolean> stringMinReliable = new HashMap<>();
-        Map<DeltaColumnHandle, Boolean> stringMaxReliable = new HashMap<>();
-        columnHandles.forEach(col -> {
-            stringMinReliable.put(col, true);
-            stringMaxReliable.put(col, true);
-        });
-
-        // Distinct partition values per partition column for exact NDV
-        Map<DeltaColumnHandle, Set<String>> partitionDistinctValues = new HashMap<>();
-        Map<DeltaColumnHandle, Boolean> partitionNdvExceeded = new HashMap<>();
-        columnHandles.stream()
-                .filter(col -> col.getColumnType() == PARTITION)
-                .forEach(col -> {
-                    partitionDistinctValues.put(col, new HashSet<>());
-                    partitionNdvExceeded.put(col, false);
-                });
-
-        boolean hasFiles = false;
+        long physicalRows = 0;
+        long liveRows = 0;
+        long totalBytes = 0;
         while (fileEntries.hasNext()) {
-            DeltaFileEntry entry = fileEntries.next();
-            hasFiles = true;
-
-            // Any file without stats → cannot produce a reliable aggregate
-            if (!entry.getStats().isPresent()) {
-                logIncompleteStatsWarning(deltaTable.getSchemaName() + "." + deltaTable.getTableName(), entry.getPath());
+            DeltaFileEntry file = fileEntries.next();
+            Optional<DeltaJsonFileStatistics> stats = file.getStats();
+            Optional<Long> numRecords = stats.flatMap(DeltaFileStatistics::getNumRecords);
+            if (!numRecords.isPresent()) {
+                logIncompleteStatsWarning(deltaTable.getSchemaName() + "." + deltaTable.getTableName(), file.getPath());
                 return TableStatistics.empty();
             }
-            DeltaFileStatistics stats = entry.getStats().get();
-
-            // Any file without row count → cannot produce a reliable aggregate
-            if (!stats.getNumRecords().isPresent()) {
-                logIncompleteStatsWarning(deltaTable.getSchemaName() + "." + deltaTable.getTableName(), entry.getPath());
-                return TableStatistics.empty();
-            }
-
-            long fileNumRecords = stats.getNumRecords().get();
-            totalNumRecords += fileNumRecords;
-
-            for (DeltaColumnHandle column : columnHandles) {
-                if (column.getColumnType() == PARTITION) {
-                    // Case-insensitive lookup — partition map uses original case, column name may be lowercased
-                    String partitionValue = getPartitionValue(entry.getPartitionValues(), column.getLogicalName());
-                    if (partitionValue == null) {
-                        nullCounts.merge(column, (double) fileNumRecords, Double::sum);
-                    }
-                    else if (!partitionNdvExceeded.get(column)) {
-                        Set<String> distincts = partitionDistinctValues.get(column);
-                        distincts.add(partitionValue);
-                        if (distincts.size() > MAX_PARTITION_NDV_THRESHOLD) {
-                            partitionNdvExceeded.put(column, true);
-                            distincts.clear(); // Free up memory immediately
-                        }
-                    }
-                }
-                else {
-                    // Use physical name for stats lookup (column-mapping tables store stats by physical name)
-                    String physicalName = column.getPhysicalName() != null
-                            ? column.getPhysicalName()
-                            : column.getLogicalName();
-
-                    Optional<Long> maybeNullCount = stats.getNullCount(physicalName);
-                    if (maybeNullCount.isPresent()) {
-                        if (!Double.isNaN(nullCounts.get(column))) {
-                            nullCounts.put(column, nullCounts.get(column) + maybeNullCount.get());
-                        }
-                    }
-                    else {
-                        nullCounts.put(column, NaN); // mark unknown for this column
-                    }
-
-                    boolean hasNonNullValues = fileNumRecords > maybeNullCount.orElse(0L);
-
-                    // Track Double Ranges (min)
-                    Optional<Object> minValOpt = stats.getMinColumnValue(column);
-                    OptionalDouble minDoubleOpt = minValOpt.isPresent()
-                            ? toDoubleStatistic(minValOpt.get(), column.getDataType())
-                            : OptionalDouble.empty();
-                    if (minDoubleOpt.isPresent()) {
-                        minValues.merge(column, minDoubleOpt.getAsDouble(), Math::min);
-                    }
-                    else if (hasNonNullValues) {
-                        minReliable.put(column, false);
-                    }
-
-                    // Track Double Ranges (max)
-                    Optional<Object> maxValOpt = stats.getMaxColumnValue(column);
-                    OptionalDouble maxDoubleOpt = maxValOpt.isPresent()
-                            ? toDoubleStatistic(maxValOpt.get(), column.getDataType())
-                            : OptionalDouble.empty();
-                    if (maxDoubleOpt.isPresent()) {
-                        maxValues.merge(column, maxDoubleOpt.getAsDouble(), Math::max);
-                    }
-                    else if (hasNonNullValues) {
-                        maxReliable.put(column, false);
-                    }
-
-                    // Track String Ranges (varchar)
-                    boolean isVarchar = column.getDataType().getBase().equalsIgnoreCase("varchar");
-                    if (isVarchar) {
-                        if (minValOpt.isPresent()) {
-                            String valueStr = minValOpt.get().toString();
-                            minStringValues.merge(column, valueStr, (s1, s2) -> s1.compareTo(s2) < 0 ? s1 : s2);
-                        }
-                        else if (hasNonNullValues) {
-                            stringMinReliable.put(column, false);
-                        }
-
-                        if (maxValOpt.isPresent()) {
-                            String valueStr = maxValOpt.get().toString();
-                            maxStringValues.merge(column, valueStr, (s1, s2) -> s1.compareTo(s2) > 0 ? s1 : s2);
-                        }
-                        else if (hasNonNullValues) {
-                            stringMaxReliable.put(column, false);
-                        }
-                    }
-                }
+            long fileRows = numRecords.get();
+            physicalRows += fileRows;
+            liveRows += fileRows - file.getDeletedRowCount();
+            totalBytes += file.getSize();
+            for (ColumnStatsAccumulator column : columns) {
+                column.add(file, stats.get(), fileRows);
             }
         }
 
-        if (!hasFiles || totalNumRecords == 0) {
-            return createZeroStatistics(columnHandles);
+        if (liveRows <= 0) {
+            return createZeroStatistics(columns);
         }
 
-        final double finalNumRecords = totalNumRecords;
-        TableStatistics.Builder statsBuilder = TableStatistics.builder()
-                .setRowCount(Estimate.of(finalNumRecords));
-
-        for (DeltaColumnHandle column : columnHandles) {
-            ColumnStatistics.Builder colBuilder = ColumnStatistics.builder();
-
-            Double nullCount = nullCounts.get(column);
-            colBuilder.setNullsFraction(
-                    Double.isNaN(nullCount)
-                            ? Estimate.unknown()
-                            : Estimate.of(nullCount / finalNumRecords));
-
-            Double minValue = minValues.get(column);
-            Double maxValue = maxValues.get(column);
-            boolean isMinReliable = minReliable.getOrDefault(column, false) && minValue != null;
-            boolean isMaxReliable = maxReliable.getOrDefault(column, false) && maxValue != null;
-
-            if (isMinReliable && isMaxReliable) {
-                colBuilder.setRange(new DoubleRange(minValue, maxValue));
-            }
-            else if (isMaxReliable) {
-                colBuilder.setRange(new DoubleRange(NEGATIVE_INFINITY, maxValue));
-            }
-            else if (isMinReliable) {
-                colBuilder.setRange(new DoubleRange(minValue, POSITIVE_INFINITY));
-            }
-
-            // String range estimation
-            boolean isVarchar = column.getDataType().getBase().equalsIgnoreCase("varchar");
-            if (isVarchar) {
-                String minStr = minStringValues.get(column);
-                String maxStr = maxStringValues.get(column);
-                boolean isMinStrReliable = stringMinReliable.getOrDefault(column, false) && minStr != null;
-                boolean isMaxStrReliable = stringMaxReliable.getOrDefault(column, false) && maxStr != null;
-                if (isMinStrReliable && isMaxStrReliable && minStr.compareTo(maxStr) <= 0) {
-                    colBuilder.setStringRange(new StringRange(minStr, maxStr));
-                }
-            }
-
-            if (column.getColumnType() == PARTITION) {
-                // Exact NDV from observed distinct partition values
-                if (partitionNdvExceeded.get(column)) {
-                    colBuilder.setDistinctValuesCount(Estimate.unknown());
-                }
-                else {
-                    colBuilder.setDistinctValuesCount(
-                            Estimate.of(partitionDistinctValues.get(column).size()));
-                }
-            }
-            statsBuilder.setColumnStatistics(column, colBuilder.build());
+        TableStatistics.Builder builder = TableStatistics.builder()
+                .setRowCount(Estimate.of(liveRows))
+                .setTotalSize(Estimate.of(totalBytes));
+        for (ColumnStatsAccumulator column : columns) {
+            // null counts in add.stats are over physical rows, so normalize by physical rows
+            builder.setColumnStatistics(column.handle, column.build(physicalRows));
         }
+        return builder.build();
+    }
 
-        return statsBuilder.build();
+    private static List<DeltaColumnHandle> resolveColumns(DeltaTable deltaTable, List<ColumnHandle> requestedColumns)
+    {
+        if (requestedColumns == null) {
+            return buildColumnHandles(deltaTable.getColumns());
+        }
+        // Key the result by the planner's own handles; rebuilding and matching via equals() is fragile
+        return requestedColumns.stream()
+                .map(DeltaColumnHandle.class::cast)
+                .filter(column -> !column.getSubfield().isPresent())
+                .collect(toImmutableList());
     }
 
     private static List<DeltaColumnHandle> buildColumnHandles(List<DeltaColumn> columns)
@@ -342,138 +211,262 @@ public class DeltaTableStatisticsProvider
                         col.getType(),
                         col.isPartition() ? PARTITION : REGULAR,
                         Optional.empty()))
-                .collect(Collectors.toList());
+                .collect(toImmutableList());
     }
 
-    private static TableStatistics createZeroStatistics(List<DeltaColumnHandle> columnHandles)
+    private static TableStatistics createZeroStatistics(List<ColumnStatsAccumulator> columns)
     {
-        TableStatistics.Builder statsBuilder = TableStatistics.builder()
-                .setRowCount(Estimate.of(0));
-        for (DeltaColumnHandle column : columnHandles) {
-            ColumnStatistics.Builder colBuilder = ColumnStatistics.builder();
-            colBuilder.setNullsFraction(Estimate.of(0));
-            colBuilder.setDistinctValuesCount(Estimate.of(0));
-            statsBuilder.setColumnStatistics(column, colBuilder.build());
+        TableStatistics.Builder builder = TableStatistics.builder()
+                .setRowCount(Estimate.zero())
+                .setTotalSize(Estimate.zero());
+        for (ColumnStatsAccumulator column : columns) {
+            builder.setColumnStatistics(column.handle, ColumnStatistics.builder()
+                    .setNullsFraction(Estimate.zero())
+                    .setDistinctValuesCount(Estimate.zero())
+                    .build());
         }
-        return statsBuilder.build();
+        return builder.build();
     }
 
-    private static boolean isValidInRange(Double d)
+    private enum RangeKind
     {
-        return d != null && !Double.isNaN(d);
+        DOUBLE, STRING, NONE;
+
+        static RangeKind of(Type type)
+        {
+            if (type instanceof DecimalType || type.equals(BIGINT) || type.equals(INTEGER) || type.equals(SMALLINT)
+                    || type.equals(TINYINT) || type.equals(DOUBLE) || type.equals(REAL) || type.equals(DATE)) {
+                return DOUBLE;
+            }
+            if (type instanceof VarcharType) {
+                return STRING;
+            }
+            // TIMESTAMP[ WITH TIME ZONE]: StatsUtil.toStatsRepresentation cannot map literals of these types,
+            // so the CBO would never consult the range. BOOLEAN/VARBINARY/complex: no useful range.
+            return NONE;
+        }
+    }
+
+    private abstract static class ColumnStatsAccumulator
+    {
+        final DeltaColumnHandle handle;
+        final Type type;
+        final RangeKind rangeKind;
+        final Bounds<Double> doubleRange = new Bounds<>();
+        final Bounds<String> stringRange = new Bounds<>();
+        long nullCount;
+        boolean nullCountKnown = true;
+
+        ColumnStatsAccumulator(DeltaColumnHandle handle, Type type)
+        {
+            this.handle = requireNonNull(handle, "handle is null");
+            this.type = requireNonNull(type, "type is null");
+            this.rangeKind = RangeKind.of(type);
+        }
+
+        abstract void add(DeltaFileEntry file, DeltaFileStatistics stats, long fileRows);
+
+        Estimate distinctValuesCount()
+        {
+            return Estimate.unknown();
+        }
+
+        ColumnStatistics build(long physicalRows)
+        {
+            ColumnStatistics.Builder builder = ColumnStatistics.builder()
+                    .setNullsFraction(nullCountKnown ? Estimate.of((double) nullCount / physicalRows) : Estimate.unknown())
+                    .setDistinctValuesCount(distinctValuesCount());
+            if (rangeKind == RangeKind.DOUBLE && doubleRange.hasAnyBound()) {
+                builder.setRange(new DoubleRange(
+                        doubleRange.min().orElse(NEGATIVE_INFINITY),
+                        doubleRange.max().orElse(POSITIVE_INFINITY)));
+            }
+            else if (rangeKind == RangeKind.STRING && stringRange.hasBothBounds()) {
+                builder.setStringRange(new StringRange(stringRange.min().get(), stringRange.max().get()));
+            }
+            return builder.build();
+        }
+    }
+
+    private static final class RegularColumnAccumulator
+            extends ColumnStatsAccumulator
+    {
+        private final String statsName;
+
+        RegularColumnAccumulator(DeltaColumnHandle handle, Type type)
+        {
+            super(handle, type);
+            // column-mapping tables key add.stats by physical name
+            this.statsName = firstNonNull(handle.getPhysicalName(), handle.getLogicalName());
+        }
+
+        @Override
+        void add(DeltaFileEntry file, DeltaFileStatistics stats, long fileRows)
+        {
+            Optional<Long> fileNulls = stats.getNullCount(statsName);
+            if (fileNulls.isPresent()) {
+                nullCount += fileNulls.get();
+            }
+            else {
+                nullCountKnown = false;
+            }
+
+            // An empty or all-null file legitimately has no min/max and must not invalidate the bounds
+            if (fileRows == 0 || (fileNulls.isPresent() && fileNulls.get() >= fileRows)) {
+                return;
+            }
+            Optional<Object> min = stats.getMinColumnValue(handle);
+            Optional<Object> max = stats.getMaxColumnValue(handle);
+            switch (rangeKind) {
+                case DOUBLE:
+                    doubleRange.add(min.flatMap(value -> toStatsDouble(type, value)), max.flatMap(value -> toStatsDouble(type, value)));
+                    break;
+                case STRING:
+                    // Delta truncates string stats; a truncated min/max is still a valid bound
+                    stringRange.add(min.map(Object::toString), max.map(Object::toString));
+                    break;
+                case NONE:
+                    break;
+            }
+        }
+    }
+
+    private static final class PartitionColumnAccumulator
+            extends ColumnStatsAccumulator
+    {
+        private Set<String> distinctValues = new HashSet<>(); // null once the cap is exceeded
+
+        PartitionColumnAccumulator(DeltaColumnHandle handle, Type type)
+        {
+            super(handle, type);
+        }
+
+        @Override
+        void add(DeltaFileEntry file, DeltaFileStatistics stats, long fileRows)
+        {
+            if (fileRows == 0) {
+                return;
+            }
+            String value = getPartitionValue(file.getPartitionValues(), handle);
+            // Delta serializes a NULL partition value as an absent key or an empty string
+            if (isNullOrEmpty(value)) {
+                nullCount += fileRows;
+                return;
+            }
+            if (distinctValues != null && distinctValues.add(value) && distinctValues.size() > MAX_PARTITION_NDV_THRESHOLD) {
+                distinctValues = null;
+            }
+            switch (rangeKind) {
+                case DOUBLE:
+                    Optional<Double> parsed = toStatsDouble(type, value);
+                    doubleRange.add(parsed, parsed);
+                    break;
+                case STRING:
+                    stringRange.add(Optional.of(value), Optional.of(value));
+                    break;
+                case NONE:
+                    break;
+            }
+        }
+
+        @Override
+        Estimate distinctValuesCount()
+        {
+            return distinctValues == null ? Estimate.unknown() : Estimate.of(distinctValues.size());
+        }
+    }
+
+    /** Running min/max where each bound becomes permanently unknown once any contributing file lacks it. */
+    private static final class Bounds<T extends Comparable<? super T>>
+    {
+        private T min;
+        private T max;
+        private boolean minValid = true;
+        private boolean maxValid = true;
+
+        void add(Optional<T> fileMin, Optional<T> fileMax)
+        {
+            if (minValid) {
+                if (fileMin.isPresent()) {
+                    min = (min == null || fileMin.get().compareTo(min) < 0) ? fileMin.get() : min;
+                }
+                else {
+                    minValid = false;
+                    min = null;
+                }
+            }
+            if (maxValid) {
+                if (fileMax.isPresent()) {
+                    max = (max == null || fileMax.get().compareTo(max) > 0) ? fileMax.get() : max;
+                }
+                else {
+                    maxValid = false;
+                    max = null;
+                }
+            }
+        }
+
+        Optional<T> min()
+        {
+            return Optional.ofNullable(min);
+        }
+
+        Optional<T> max()
+        {
+            return Optional.ofNullable(max);
+        }
+
+        boolean hasAnyBound()
+        {
+            return (min != null || max != null) && (min == null || max == null || min.compareTo(max) <= 0);
+        }
+
+        boolean hasBothBounds()
+        {
+            return min != null && max != null && min.compareTo(max) <= 0;
+        }
     }
 
     /**
-     * Looks up a partition value case-insensitively. Returns {@code null} if absent
-     * (absent key = NULL partition value in Delta).
+     * Converts a stats JSON value or a partition-value string into Presto's double stats representation
+     * (the same one StatsUtil.toStatsRepresentation uses): numeric value for numbers/decimals, epoch day for DATE.
      */
-    private static String getPartitionValue(Map<String, String> partitionValues, String columnLogicalName)
-    {
-        if (partitionValues == null || columnLogicalName == null) {
-            return null;
-        }
-        if (partitionValues.containsKey(columnLogicalName)) {
-            return partitionValues.get(columnLogicalName);
-        }
-        String lowerKey = columnLogicalName.toLowerCase(Locale.ENGLISH);
-        for (Map.Entry<String, String> entry : partitionValues.entrySet()) {
-            if (entry.getKey().toLowerCase(Locale.ENGLISH).equals(lowerKey)) {
-                return entry.getValue();
-            }
-        }
-        return null;
-    }
-
-    /** Converts a JSON stat value to double for range statistics. Returns empty for non-numeric types. */
     @VisibleForTesting
-    static OptionalDouble toDoubleStatistic(Object value, TypeSignature type)
+    static Optional<Double> toStatsDouble(Type type, Object value)
     {
         if (value == null) {
-            return OptionalDouble.empty();
+            return Optional.empty();
         }
-        String baseType = type.getBase().toLowerCase(Locale.ENGLISH);
-        switch (baseType) {
-            case "bigint":
-            case "integer":
-            case "int":
-            case "smallint":
-            case "tinyint":
-                if (value instanceof Number) {
-                    return OptionalDouble.of(((Number) value).doubleValue());
-                }
-                return OptionalDouble.empty();
-            case "double":
-                if (value instanceof Number) {
-                    return OptionalDouble.of(((Number) value).doubleValue());
-                }
-                return OptionalDouble.empty();
-            case "real":
-            case "float":
-                // doubleValue() avoids float→double widening noise (e.g. 1.1f → 1.100000023841858)
-                if (value instanceof Number) {
-                    return OptionalDouble.of(((Number) value).doubleValue());
-                }
-                return OptionalDouble.empty();
-            case "decimal":
-                if (value instanceof Number) {
-                    return OptionalDouble.of(((Number) value).doubleValue());
-                }
-                // Delta may encode decimal as a string (e.g. "123.45")
-                if (value instanceof String) {
-                    try {
-                        return OptionalDouble.of(Double.parseDouble((String) value));
-                    }
-                    catch (NumberFormatException e) {
-                        return OptionalDouble.empty();
-                    }
-                }
-                return OptionalDouble.empty();
-            case "date":
-                // Delta stores dates as epoch-day integers, but some tools store them as ISO-8601 string dates
-                if (value instanceof Number) {
-                    return OptionalDouble.of(((Number) value).doubleValue());
-                }
-                if (value instanceof String) {
-                    try {
-                        LocalDate date = LocalDate.parse((String) value);
-                        return OptionalDouble.of(date.toEpochDay());
-                    }
-                    catch (Exception e) {
-                        return OptionalDouble.empty();
-                    }
-                }
-                return OptionalDouble.empty();
-            case "timestamp":
-            case "timestamp with time zone":
-            case "timestamp_ntz":
-                if (value instanceof Number) {
-                    return OptionalDouble.of(((Number) value).doubleValue());
-                }
-                if (value instanceof String) {
-                    try {
-                        String str = ((String) value).trim().replace(' ', 'T');
-                        Instant instant;
-                        if (str.endsWith("Z") || str.endsWith("z") || str.contains("+") || (str.lastIndexOf('-') > 10)) {
-                            try {
-                                instant = Instant.parse(str);
-                            }
-                            catch (DateTimeParseException e) {
-                                instant = OffsetDateTime.parse(str).toInstant();
-                            }
-                        }
-                        else {
-                            instant = LocalDateTime.parse(str).toInstant(ZoneOffset.UTC);
-                        }
-                        long epochMicros = instant.getEpochSecond() * 1_000_000L + (instant.getNano() / 1_000L);
-                        return OptionalDouble.of((double) epochMicros);
-                    }
-                    catch (Exception e) {
-                        return OptionalDouble.empty();
-                    }
-                }
-                return OptionalDouble.empty();
-            default:
-                return OptionalDouble.empty(); // varchar, boolean etc. — no range stats
+        try {
+            if (type.equals(DATE)) {
+                return Optional.of(value instanceof Number
+                        ? ((Number) value).doubleValue()
+                        : (double) LocalDate.parse(value.toString()).toEpochDay());
+            }
+            double result = value instanceof Number ? ((Number) value).doubleValue() : Double.parseDouble(value.toString());
+            return Double.isNaN(result) ? Optional.empty() : Optional.of(result);
         }
+        catch (NumberFormatException | DateTimeParseException e) {
+            return Optional.empty();
+        }
+    }
+
+    private static String getPartitionValue(Map<String, String> partitionValues, DeltaColumnHandle column)
+    {
+        if (partitionValues == null) {
+            return null;
+        }
+        // With column mapping, Delta keys partitionValues by physical name
+        for (String name : Arrays.asList(column.getPhysicalName(), column.getLogicalName())) {
+            if (name != null && partitionValues.containsKey(name)) {
+                return partitionValues.get(name);
+            }
+        }
+        return partitionValues.entrySet().stream()
+                .filter(entry -> (column.getPhysicalName() != null && entry.getKey().equalsIgnoreCase(column.getPhysicalName()))
+                        || (column.getLogicalName() != null && entry.getKey().equalsIgnoreCase(column.getLogicalName())))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
     }
 }
