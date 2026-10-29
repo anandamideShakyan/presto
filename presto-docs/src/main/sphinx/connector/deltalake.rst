@@ -56,8 +56,9 @@ Property Name                                   Description                     
                                                 case-sensitive manner.
 ``delta.table-statistics-enabled``              Enable table statistics (row count, min/max, null         ``true``
                                                 fractions, partition NDV) derived from the transaction
-                                                log for cost-based query optimization. Also see the ``statistics_enabled``
-                                                session property in :ref:`delta-session-properties`.
+                                                log for cost-based query optimization. Also see the
+                                                ``statistics_enabled`` session property in
+                                                :ref:`delta-session-properties`.
 =============================================== ========================================================= ============
 
 .. _delta-session-properties:
